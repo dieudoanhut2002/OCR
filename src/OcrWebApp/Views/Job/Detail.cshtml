@@ -1,0 +1,241 @@
+@model JobDetailViewModel
+@{
+    ViewData["Title"] = $"Chi tiết OCR: {Model.Job.OriginalFileName}";
+    var isProcessing = Model.Job.Status == OcrJobStatus.Processing || Model.Job.Status == OcrJobStatus.Pending;
+    var isFailed = Model.Job.Status == OcrJobStatus.Failed;
+}
+
+<div class="d-flex flex-wrap justify-content-between align-items-center mb-3 pb-2 border-bottom">
+    <div class="d-flex align-items-center gap-2">
+        <a asp-action="History" class="btn btn-outline-secondary btn-sm" title="Quay lại danh sách">
+            <i class="bi bi-arrow-left"></i>
+        </a>
+        <div>
+            <h4 class="mb-0 fw-bold text-dark text-truncate" style="max-width: 500px;" title="@Model.Job.OriginalFileName">
+                <i class="bi bi-file-earmark-text text-primary me-1"></i> @Model.Job.OriginalFileName
+            </h4>
+            <div class="text-muted small">
+                Tạo lúc: @Model.Job.CreatedAtUtc.ToLocalTime().ToString("HH:mm:ss dd/MM/yyyy") &bull;
+                Dung lượng: @(Model.Job.FileSizeBytes / 1024) KB &bull;
+                Ngôn ngữ: <span class="badge bg-secondary">@Model.Job.Language</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="d-flex align-items-center gap-2 mt-2 mt-md-0">
+        <!-- Status & Confidence -->
+        @if (Model.Job.Status == OcrJobStatus.Completed)
+        {
+            <span class="badge bg-success-subtle text-success border border-success-subtle px-3 py-2">
+                <i class="bi bi-check-circle-fill me-1"></i> Hoàn tất
+            </span>
+            @if (Model.Job.AverageConfidence.HasValue)
+            {
+                var conf = Model.Job.AverageConfidence.Value;
+                var badgeClass = conf >= 80 ? "bg-success" : (conf >= 60 ? "bg-warning text-dark" : "bg-danger");
+                <span class="badge @badgeClass px-2 py-2" title="Độ tin cậy OCR trung bình">
+                    Độ tin cậy: @conf.ToString("F1")%
+                </span>
+            }
+        }
+        else if (isProcessing)
+        {
+            <span class="badge bg-warning-subtle text-warning border border-warning-subtle px-3 py-2">
+                <span class="spinner-border spinner-border-sm me-1" role="status"></span>
+                Đang xử lý (@Model.Job.ProcessedPages/@Model.Job.TotalPages trang)
+            </span>
+        }
+        else
+        {
+            <span class="badge bg-danger px-3 py-2">
+                <i class="bi bi-x-circle-fill me-1"></i> Thất bại
+            </span>
+            <button type="button" class="btn btn-sm btn-outline-danger" id="retryJobBtn" data-job-id="@Model.Job.Id">
+                <i class="bi bi-arrow-clockwise me-1"></i> Thử lại
+            </button>
+        }
+
+        <!-- Export Dropdown -->
+        @if (Model.Job.Status == OcrJobStatus.Completed)
+        {
+            <div class="dropdown">
+                <button class="btn btn-success dropdown-toggle fw-semibold shadow-sm" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+                    <i class="bi bi-download me-1"></i> Xuất kết quả
+                </button>
+                <ul class="dropdown-menu dropdown-menu-end shadow">
+                    <li>
+                        <a class="dropdown-item py-2" asp-action="Export" asp-route-id="@Model.Job.Id" asp-route-format="txt">
+                            <i class="bi bi-filetype-txt text-secondary me-2"></i> File văn bản (.TXT)
+                        </a>
+                    </li>
+                    <li>
+                        <a class="dropdown-item py-2" asp-action="Export" asp-route-id="@Model.Job.Id" asp-route-format="docx">
+                            <i class="bi bi-filetype-docx text-primary me-2"></i> Tài liệu Word (.DOCX)
+                        </a>
+                    </li>
+                    <li>
+                        <a class="dropdown-item py-2" asp-action="Export" asp-route-id="@Model.Job.Id" asp-route-format="pdf">
+                            <i class="bi bi-filetype-pdf text-danger me-2"></i> File PDF (.PDF)
+                        </a>
+                    </li>
+                </ul>
+            </div>
+        }
+    </div>
+</div>
+
+@if (isProcessing)
+{
+    <div class="alert alert-info d-flex align-items-center shadow-sm" role="alert">
+        <div class="spinner-border text-primary me-3" role="status"></div>
+        <div>
+            <h5 class="alert-heading mb-1">Tài liệu đang trong hàng đợi hoặc đang được xử lý OCR</h5>
+            <p class="mb-0 small">Trang web sẽ tự động cập nhật ngay khi quá trình nhận diện hoàn tất.</p>
+        </div>
+    </div>
+}
+else if (isFailed)
+{
+    <div class="alert alert-danger shadow-sm" role="alert">
+        <h5 class="alert-heading"><i class="bi bi-exclamation-triangle-fill me-2"></i> Xử lý OCR thất bại</h5>
+        <p class="mb-0">Thông báo lỗi: <strong>@(Model.Job.ErrorMessage ?? "Không xác định")</strong></p>
+    </div>
+}
+
+@if (Model.Job.Status == OcrJobStatus.Completed)
+{
+    <!-- Multi-page PDF Pagination Controls -->
+    @if (Model.HasMultiplePages)
+    {
+        <div class="card border-0 shadow-sm mb-3 bg-white">
+            <div class="card-body py-2 px-3 d-flex flex-wrap justify-content-between align-items-center gap-2">
+                <div class="d-flex align-items-center gap-2">
+                    <span class="fw-semibold text-secondary small">Trang tài liệu:</span>
+                    <div class="btn-group btn-group-sm" role="group">
+                        <a asp-action="Detail" asp-route-id="@Model.Job.Id" asp-route-page="@(Model.CurrentPageNumber - 1)"
+                           class="btn btn-outline-secondary @(Model.CurrentPageNumber <= 1 ? "disabled" : "")">
+                            <i class="bi bi-chevron-left"></i> Trang trước
+                        </a>
+                        <span class="btn btn-light border text-dark fw-bold px-3">
+                            @Model.CurrentPageNumber / @Model.Job.TotalPages
+                        </span>
+                        <a asp-action="Detail" asp-route-id="@Model.Job.Id" asp-route-page="@(Model.CurrentPageNumber + 1)"
+                           class="btn btn-outline-secondary @(Model.CurrentPageNumber >= Model.Job.TotalPages ? "disabled" : "")">
+                            Trang sau <i class="bi bi-chevron-right"></i>
+                        </a>
+                    </div>
+                </div>
+
+                <div class="d-flex align-items-center gap-2">
+                    @if (Model.CurrentPage?.IsTextLayerDirect == true)
+                    {
+                        <span class="badge bg-info-subtle text-info border border-info-subtle" title="Trích xuất trực tiếp từ layer text có sẵn của PDF">
+                            <i class="bi bi-lightning-fill"></i> Direct PDF Text Layer
+                        </span>
+                    }
+                    @if (Model.CurrentPage?.Confidence.HasValue == true)
+                    {
+                        <span class="badge bg-secondary-subtle text-dark">
+                            Độ tin cậy trang: @Model.CurrentPage.Confidence.Value.ToString("F1")%
+                        </span>
+                    }
+                </div>
+            </div>
+        </div>
+    }
+
+    <!-- Side-by-Side Workspace -->
+    <div class="row g-3">
+        <!-- Left Pane: Image / Page Preview -->
+        <div class="col-lg-6">
+            <div class="card border-0 shadow-sm rounded-3 h-100 d-flex flex-column">
+                <div class="card-header bg-white py-2 px-3 border-bottom d-flex justify-content-between align-items-center">
+                    <span class="fw-bold text-dark small">
+                        <i class="bi bi-image me-1"></i> Tài liệu gốc (Trang @Model.CurrentPageNumber)
+                    </span>
+                    <div class="btn-group btn-group-sm">
+                        <button type="button" class="btn btn-outline-secondary" id="zoomInBtn" title="Phóng to">
+                            <i class="bi bi-zoom-in"></i>
+                        </button>
+                        <button type="button" class="btn btn-outline-secondary" id="zoomOutBtn" title="Thu nhỏ">
+                            <i class="bi bi-zoom-out"></i>
+                        </button>
+                        <button type="button" class="btn btn-outline-secondary" id="zoomResetBtn" title="Đặt lại kích thước">
+                            <i class="bi bi-arrows-angle-contract"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="card-body p-0 overflow-auto bg-dark-subtle d-flex align-items-center justify-content-center"
+                     style="height: 650px;" id="imageContainer">
+                    <img id="previewImage"
+                         src="@Url.Action("PageImage", "Job", new { id = Model.Job.Id, page = Model.CurrentPageNumber })"
+                         alt="Document Page @Model.CurrentPageNumber"
+                         class="img-fluid rounded shadow-sm transition-transform"
+                         style="max-height: 100%; object-fit: contain; transform-origin: top center; transition: transform 0.2s ease;" />
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Pane: Extracted Text Editor -->
+        <div class="col-lg-6">
+            <div class="card border-0 shadow-sm rounded-3 h-100 d-flex flex-column">
+                <div class="card-header bg-white py-2 px-3 border-bottom d-flex justify-content-between align-items-center">
+                    <span class="fw-bold text-dark small">
+                        <i class="bi bi-textarea-t me-1"></i> Văn bản nhận diện (Có thể chỉnh sửa)
+                    </span>
+                    <div class="d-flex align-items-center gap-1">
+                        <button type="button" class="btn btn-sm btn-outline-secondary" id="copyTextBtn" title="Sao chép toàn bộ văn bản">
+                            <i class="bi bi-clipboard me-1"></i> Sao chép
+                        </button>
+                        <button type="button" class="btn btn-sm btn-primary" id="saveTextBtn"
+                                data-job-id="@Model.Job.Id"
+                                data-page="@(Model.HasMultiplePages ? Model.CurrentPageNumber : (int?)null)">
+                            <i class="bi bi-floppy me-1"></i> Lưu thay đổi
+                        </button>
+                    </div>
+                </div>
+                <div class="card-body p-3 d-flex flex-column">
+                    @{
+                        var displayText = Model.HasMultiplePages
+                            ? (Model.CurrentPage?.ExtractedText ?? string.Empty)
+                            : (Model.Job.ExtractedText ?? string.Empty);
+                    }
+                    <textarea id="ocrTextArea" class="form-control font-monospace flex-grow-1 p-3 border-0 bg-light"
+                              style="height: 570px; resize: none; font-size: 0.95rem; line-height: 1.6;"
+                              placeholder="Không có nội dung văn bản nào được nhận diện...">@displayText</textarea>
+                    
+                    <div class="d-flex justify-content-between align-items-center mt-2 text-muted small">
+                        <span id="charCount">0 ký tự &bull; 0 từ</span>
+                        <span id="saveStatus" class="fw-semibold text-success d-none">
+                            <i class="bi bi-check-circle-fill me-1"></i> Đã lưu thay đổi
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@section Scripts {
+    <script src="~/js/ocr-viewer.js" asp-append-version="true"></script>
+    @if (isProcessing)
+    {
+        <script>
+            // Poll for completion every 2.5 seconds
+            const pollInterval = setInterval(async () => {
+                try {
+                    const res = await fetch('@Url.Action("Status", "Job", new { id = Model.Job.Id })');
+                    if (res.ok) {
+                        const data = await res.json();
+                        if (data.statusNumber === 2 || data.statusNumber === 3) {
+                            clearInterval(pollInterval);
+                            window.location.reload();
+                        }
+                    }
+                } catch (e) {
+                    console.error("Lỗi khi kiểm tra tiến trình:", e);
+                }
+            }, 2500);
+        </script>
+    }
+}
