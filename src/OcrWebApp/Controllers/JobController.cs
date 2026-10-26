@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using OcrWebApp.Data;
@@ -34,7 +33,8 @@ public class JobController : Controller
 
     private string GetSessionToken()
     {
-        return HttpContext.Items[UserSessionMiddleware.SessionItemKey]?.ToString() ?? string.Empty;
+        string result = HttpContext.Items[UserSessionMiddleware.SessionItemKey]?.ToString() ?? string.Empty;
+        return result;
     }
 
     [HttpPost]
@@ -46,7 +46,7 @@ public class JobController : Controller
             return BadRequest(new { success = false, message = "Vui lòng chọn ít nhất một file ảnh hoặc PDF." });
         }
 
-        var sessionToken = GetSessionToken();
+        string sessionToken = GetSessionToken();
         var createdJobs = new List<JobStatusResponseDto>();
         var errors = new List<string>();
 
@@ -61,7 +61,7 @@ public class JobController : Controller
 
             try
             {
-                var storedFileName = await _fileSecurity.SaveUploadedFileAsync(file);
+                string storedFileName = await _fileSecurity.SaveUploadedFileAsync(file);
 
                 var job = new OcrJob
                 {
@@ -71,7 +71,7 @@ public class JobController : Controller
                     ContentType = contentType,
                     FileSizeBytes = file.Length,
                     Language = string.IsNullOrWhiteSpace(dto.Language) ? "vie" : dto.Language,
-                    PageRange = dto.PageRange,
+                    PageRange = string.IsNullOrWhiteSpace(dto.PageRange) ? "all" : dto.PageRange.Trim(),
                     Status = OcrJobStatus.Pending,
                     TotalPages = 1,
                     ProcessedPages = 0,
@@ -116,7 +116,7 @@ public class JobController : Controller
     [HttpGet]
     public async Task<IActionResult> Status(Guid id)
     {
-        var sessionToken = GetSessionToken();
+        string sessionToken = GetSessionToken();
         var job = await _db.Jobs
             .AsNoTracking()
             .FirstOrDefaultAsync(j => j.Id == id && j.SessionToken == sessionToken);
@@ -154,7 +154,7 @@ public class JobController : Controller
             .Where(g => g != Guid.Empty)
             .ToList();
 
-        var sessionToken = GetSessionToken();
+        string sessionToken = GetSessionToken();
         var jobs = await _db.Jobs
             .AsNoTracking()
             .Where(j => idList.Contains(j.Id) && j.SessionToken == sessionToken)
@@ -180,7 +180,7 @@ public class JobController : Controller
     [HttpGet]
     public async Task<IActionResult> Detail(Guid id, int page = 1)
     {
-        var sessionToken = GetSessionToken();
+        string sessionToken = GetSessionToken();
         var job = await _db.Jobs
             .Include(j => j.Pages)
             .FirstOrDefaultAsync(j => j.Id == id && j.SessionToken == sessionToken);
@@ -206,7 +206,7 @@ public class JobController : Controller
     [HttpGet]
     public async Task<IActionResult> PageImage(Guid id, int page = 1)
     {
-        var sessionToken = GetSessionToken();
+        string sessionToken = GetSessionToken();
         var job = await _db.Jobs
             .Include(j => j.Pages)
             .FirstOrDefaultAsync(j => j.Id == id && j.SessionToken == sessionToken);
@@ -222,7 +222,7 @@ public class JobController : Controller
             // If single image job without separate page image, return original file if image
             if (!job.ContentType.Equals("application/pdf", StringComparison.OrdinalIgnoreCase))
             {
-                var originalPath = _fileSecurity.GetSafeStoragePath(job.StoredFileName);
+                string originalPath = _fileSecurity.GetSafeStoragePath(job.StoredFileName);
                 if (System.IO.File.Exists(originalPath))
                 {
                     return PhysicalFile(originalPath, job.ContentType);
@@ -231,7 +231,7 @@ public class JobController : Controller
             return NotFound();
         }
 
-        var imagePath = _fileSecurity.GetSafeStoragePath(targetPage.PageImagePath);
+        string imagePath = _fileSecurity.GetSafeStoragePath(targetPage.PageImagePath);
         if (!System.IO.File.Exists(imagePath))
         {
             return NotFound();
@@ -249,7 +249,7 @@ public class JobController : Controller
             return BadRequest(new { success = false, message = "Dữ liệu yêu cầu không hợp lệ." });
         }
 
-        var sessionToken = GetSessionToken();
+        string sessionToken = GetSessionToken();
         var job = await _db.Jobs
             .Include(j => j.Pages)
             .FirstOrDefaultAsync(j => j.Id == req.JobId && j.SessionToken == sessionToken);
@@ -268,7 +268,7 @@ public class JobController : Controller
                 page.UpdatedAtUtc = DateTime.UtcNow;
 
                 // Re-sync full document text
-                var fullText = string.Join("\n\n--- Trang {0} ---\n\n",
+                string fullText = string.Join("\n\n--- Trang {0} ---\n\n",
                     job.Pages.OrderBy(p => p.PageNumber).Select(p => p.ExtractedText));
                 job.ExtractedText = fullText;
             }
@@ -289,7 +289,7 @@ public class JobController : Controller
     [HttpGet]
     public async Task<IActionResult> Export(Guid id, string format = "txt")
     {
-        var sessionToken = GetSessionToken();
+        string sessionToken = GetSessionToken();
         var job = await _db.Jobs
             .Include(j => j.Pages)
             .FirstOrDefaultAsync(j => j.Id == id && j.SessionToken == sessionToken);
@@ -299,23 +299,23 @@ public class JobController : Controller
             return NotFound("Không tìm thấy tài liệu.");
         }
 
-        var safeBaseName = Path.GetFileNameWithoutExtension(job.OriginalFileName);
-        var cleanBaseName = string.Join("_", safeBaseName.Split(Path.GetInvalidFileNameChars()));
+        string safeBaseName = Path.GetFileNameWithoutExtension(job.OriginalFileName);
+        string cleanBaseName = string.Join("_", safeBaseName.Split(Path.GetInvalidFileNameChars()));
 
         switch (format.ToLowerInvariant())
         {
             case "docx":
             case "doc":
-                var docxBytes = _exportService.ExportToDocx(job);
+                byte[] docxBytes = _exportService.ExportToDocx(job);
                 return File(docxBytes, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", $"{cleanBaseName}_OCR.docx");
 
             case "pdf":
-                var pdfBytes = _exportService.ExportToPdf(job);
+                byte[] pdfBytes = _exportService.ExportToPdf(job);
                 return File(pdfBytes, "application/pdf", $"{cleanBaseName}_OCR.pdf");
 
             case "txt":
             default:
-                var txtBytes = _exportService.ExportToTxt(job);
+                byte[] txtBytes = _exportService.ExportToTxt(job);
                 return File(txtBytes, "text/plain; charset=utf-8", $"{cleanBaseName}_OCR.txt");
         }
     }
@@ -324,7 +324,7 @@ public class JobController : Controller
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> Retry(Guid id)
     {
-        var sessionToken = GetSessionToken();
+        string sessionToken = GetSessionToken();
         var job = await _db.Jobs
             .FirstOrDefaultAsync(j => j.Id == id && j.SessionToken == sessionToken);
 
@@ -347,7 +347,7 @@ public class JobController : Controller
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> Delete(Guid id)
     {
-        var sessionToken = GetSessionToken();
+        string sessionToken = GetSessionToken();
         var job = await _db.Jobs
             .Include(j => j.Pages)
             .FirstOrDefaultAsync(j => j.Id == id && j.SessionToken == sessionToken);
@@ -380,7 +380,7 @@ public class JobController : Controller
     [HttpGet]
     public async Task<IActionResult> History()
     {
-        var sessionToken = GetSessionToken();
+        string sessionToken = GetSessionToken();
         var jobs = await _db.Jobs
             .Where(j => j.SessionToken == sessionToken)
             .OrderByDescending(j => j.CreatedAtUtc)

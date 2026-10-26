@@ -1,5 +1,3 @@
-using System.Text;
-using System.Text.Json;
 using Microsoft.Extensions.Options;
 using OcrWebApp.Options;
 using OcrWebApp.Services.Abstractions;
@@ -7,7 +5,10 @@ using PDFtoImage;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Processing;
 using SkiaSharp;
+using System.Text;
+using System.Text.Json;
 using UglyToad.PdfPig;
+using UglyToad.PdfPig.Content;
 
 namespace OcrWebApp.Services.Implementations;
 
@@ -31,7 +32,7 @@ public class DocumentProcessingService : IDocumentProcessingService
     {
         try
         {
-            using var image = Image.Load(imageBytes);
+            using Image image = Image.Load(imageBytes);
 
             image.Mutate(ctx =>
             {
@@ -51,7 +52,7 @@ public class DocumentProcessingService : IDocumentProcessingService
                 }
             });
 
-            using var outStream = new MemoryStream();
+            using MemoryStream outStream = new MemoryStream();
             image.SaveAsPng(outStream);
             return outStream.ToArray();
         }
@@ -89,10 +90,10 @@ public class DocumentProcessingService : IDocumentProcessingService
         Func<int, int, Task>? onPageProgress,
         CancellationToken cancellationToken)
     {
-        var pagesResult = new List<ProcessedPageResult>();
+        List<ProcessedPageResult> pagesResult = new List<ProcessedPageResult>();
 
         // 1. Inspect PDF structure with PdfPig to check total pages & text layer
-        using var pdfPigDoc = PdfDocument.Open(storedFilePath);
+        using PdfDocument pdfPigDoc = PdfDocument.Open(storedFilePath);
         var totalPages = pdfPigDoc.NumberOfPages;
 
         if (totalPages > _settings.MaxPdfPages)
@@ -101,11 +102,11 @@ public class DocumentProcessingService : IDocumentProcessingService
         }
 
         // Cache existing text layers
-        var pdfPigPages = pdfPigDoc.GetPages().ToList();
+        List<Page> pdfPigPages = pdfPigDoc.GetPages().ToList();
 
         // 2. Render each page using PDFtoImage
         await using var pdfFileStream = File.OpenRead(storedFilePath);
-        var renderedImages = Conversion.ToImages(pdfFileStream).ToList();
+        List<SKBitmap> renderedImages = Conversion.ToImages(pdfFileStream).ToList();
 
         var allowedPages = ParsePageRange(options.PageRange, totalPages);
 
@@ -123,7 +124,7 @@ public class DocumentProcessingService : IDocumentProcessingService
             // Render preview PNG bytes
             byte[] pagePreviewPngBytes;
             using (var skBitmap = renderedImages[pageIndex])
-            using (var image = SKImage.FromBitmap(skBitmap))
+            using (SKImage image = SKImage.FromBitmap(skBitmap))
             using (var data = image.Encode(SKEncodedImageFormat.Png, 95))
             {
                 pagePreviewPngBytes = data.ToArray();
@@ -183,7 +184,7 @@ public class DocumentProcessingService : IDocumentProcessingService
             }
         }
 
-        var fullTextBuilder = new StringBuilder();
+        StringBuilder fullTextBuilder = new StringBuilder();
         foreach (var p in pagesResult)
         {
             if (fullTextBuilder.Length > 0)
@@ -210,10 +211,10 @@ public class DocumentProcessingService : IDocumentProcessingService
         CancellationToken cancellationToken)
     {
         var rawBytes = await File.ReadAllBytesAsync(storedFilePath, cancellationToken);
-        var pagesResult = new List<ProcessedPageResult>();
+        List<ProcessedPageResult> pagesResult = new List<ProcessedPageResult>();
 
         // Check if multi-frame TIFF
-        using var imageInfo = Image.Load(rawBytes);
+        using Image imageInfo = Image.Load(rawBytes);
         var frameCount = imageInfo.Frames.Count;
 
         if (frameCount > 1)
@@ -230,7 +231,7 @@ public class DocumentProcessingService : IDocumentProcessingService
                 var pageNumber = i + 1;
 
                 using var singleFrame = imageInfo.Frames.CloneFrame(i);
-                using var ms = new MemoryStream();
+                using MemoryStream ms = new MemoryStream();
                 await singleFrame.SaveAsPngAsync(ms, cancellationToken);
                 var framePngBytes = ms.ToArray();
 
@@ -293,7 +294,7 @@ public class DocumentProcessingService : IDocumentProcessingService
             }
         }
 
-        var fullTextBuilder = new StringBuilder();
+        StringBuilder fullTextBuilder = new StringBuilder();
         foreach (var p in pagesResult)
         {
             if (fullTextBuilder.Length > 0 && pagesResult.Count > 1)
@@ -314,9 +315,12 @@ public class DocumentProcessingService : IDocumentProcessingService
 
     private static HashSet<int>? ParsePageRange(string? rangeStr, int totalPages)
     {
-        if (string.IsNullOrWhiteSpace(rangeStr)) return null;
+        if (string.IsNullOrWhiteSpace(rangeStr) || rangeStr.Trim().Equals("all", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
 
-        var result = new HashSet<int>();
+        HashSet<int> result = new HashSet<int>();
         var parts = rangeStr.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries);
 
         foreach (var part in parts)

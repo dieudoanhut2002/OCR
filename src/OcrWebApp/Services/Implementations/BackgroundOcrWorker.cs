@@ -39,7 +39,7 @@ public class BackgroundOcrWorker : BackgroundService
         {
             try
             {
-                var jobId = await _queue.DequeueJobAsync(stoppingToken);
+                Guid jobId = await _queue.DequeueJobAsync(stoppingToken);
 
                 // Wait for concurrency slot
                 await _concurrencySemaphore.WaitAsync(stoppingToken);
@@ -77,10 +77,10 @@ public class BackgroundOcrWorker : BackgroundService
     {
         try
         {
-            using var scope = _scopeFactory.CreateScope();
-            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            using IServiceScope scope = _scopeFactory.CreateScope();
+            AppDbContext db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-            var unfinishedJobs = await db.Jobs
+            List<OcrJob> unfinishedJobs = await db.Jobs
                 .Where(j => j.Status == OcrJobStatus.Pending || j.Status == OcrJobStatus.Processing)
                 .OrderBy(j => j.CreatedAtUtc)
                 .ToListAsync(cancellationToken);
@@ -88,7 +88,7 @@ public class BackgroundOcrWorker : BackgroundService
             if (unfinishedJobs.Count > 0)
             {
                 _logger.LogInformation("Tìm thấy {Count} job chưa hoàn thành từ phiên làm việc trước. Đang đưa lại vào hàng đợi...", unfinishedJobs.Count);
-                foreach (var job in unfinishedJobs)
+                foreach (OcrJob? job in unfinishedJobs)
                 {
                     job.Status = OcrJobStatus.Pending;
                     await _queue.QueueJobAsync(job.Id, cancellationToken);
@@ -104,12 +104,12 @@ public class BackgroundOcrWorker : BackgroundService
 
     private async Task ProcessJobAsync(Guid jobId, CancellationToken cancellationToken)
     {
-        using var scope = _scopeFactory.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        var docService = scope.ServiceProvider.GetRequiredService<IDocumentProcessingService>();
-        var fileSecurity = scope.ServiceProvider.GetRequiredService<IFileSecurityService>();
+        using IServiceScope scope = _scopeFactory.CreateScope();
+        AppDbContext db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        IDocumentProcessingService docService = scope.ServiceProvider.GetRequiredService<IDocumentProcessingService>();
+        IFileSecurityService fileSecurity = scope.ServiceProvider.GetRequiredService<IFileSecurityService>();
 
-        var job = await db.Jobs
+        OcrJob? job = await db.Jobs
             .Include(j => j.Pages)
             .FirstOrDefaultAsync(j => j.Id == jobId, cancellationToken);
 
@@ -125,25 +125,25 @@ public class BackgroundOcrWorker : BackgroundService
             job.StartedAtUtc = DateTime.UtcNow;
             await db.SaveChangesAsync(cancellationToken);
 
-            var filePath = fileSecurity.GetSafeStoragePath(job.StoredFileName);
+            string filePath = fileSecurity.GetSafeStoragePath(job.StoredFileName);
             if (!File.Exists(filePath))
             {
                 throw new FileNotFoundException("File gốc đã bị xóa hoặc không thể truy cập.");
             }
 
             var options = new OcrProcessingOptions(
-                job.Language,
-                job.PreprocessGrayscale,
-                job.PreprocessContrast,
-                job.PreprocessDeskew,
-                job.PageRange
+                Language: job.Language,
+                PreprocessGrayscale: job.PreprocessGrayscale,
+                PreprocessContrast: job.PreprocessContrast,
+                PreprocessDeskew: job.PreprocessDeskew,
+                PageRange: string.IsNullOrWhiteSpace(job.PageRange) ? "all" : job.PageRange
             );
 
             // Timeout token per job
             using var jobTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             jobTimeoutCts.CancelAfter(TimeSpan.FromSeconds(_settings.ProcessingTimeoutSeconds));
 
-            var result = await docService.ProcessDocumentAsync(
+            ProcessedDocumentResult result = await docService.ProcessDocumentAsync(
                 filePath,
                 job.ContentType,
                 options,
@@ -156,9 +156,9 @@ public class BackgroundOcrWorker : BackgroundService
                         job.TotalPages = pageTotal;
                         await db.SaveChangesAsync(CancellationToken.None);
                     }
-                    catch
+                    catch (Exception ex)
                     {
-                        // Ignore progress save contention
+                        _logger.LogWarning(ex, "Không thể cập nhật tiến độ cho job {JobId} (trang {Current}/{Total}). Bỏ qua để tiếp tục.", jobId, pageCurrent, pageTotal);
                     }
                 },
                 jobTimeoutCts.Token);
@@ -166,7 +166,7 @@ public class BackgroundOcrWorker : BackgroundService
             // Remove existing pages if retrying
             if (job.Pages.Count > 0)
             {
-                foreach (var oldPage in job.Pages)
+                foreach (OcrJobPage oldPage in job.Pages)
                 {
                     if (!string.IsNullOrEmpty(oldPage.PageImagePath))
                     {
@@ -174,11 +174,12 @@ public class BackgroundOcrWorker : BackgroundService
                     }
                 }
                 db.JobPages.RemoveRange(job.Pages);
+                job.Pages.Clear();
             }
 
             // Save rendered preview pages to disk and add page records
             var jobPages = new List<OcrJobPage>();
-            foreach (var pageResult in result.Pages)
+            foreach (ProcessedPageResult pageResult in result.Pages)
             {
                 string? pagePreviewFileName = null;
                 if (pageResult.PagePreviewPngBytes != null && pageResult.PagePreviewPngBytes.Length > 0)
@@ -202,7 +203,9 @@ public class BackgroundOcrWorker : BackgroundService
                 });
             }
 
-            job.Pages = jobPages;
+            // Explicitly add new pages to DbSet so EF Core tracks them as Added (not Modified)
+            await db.JobPages.AddRangeAsync(jobPages, cancellationToken);
+
             job.TotalPages = result.TotalPages;
             job.ProcessedPages = result.TotalPages;
             job.AverageConfidence = result.AverageConfidence;
@@ -218,18 +221,33 @@ public class BackgroundOcrWorker : BackgroundService
         catch (OperationCanceledException)
         {
             _logger.LogWarning("Job OCR {JobId} bị hủy hoặc quá thời gian xử lý cho phép.", jobId);
-            job.Status = OcrJobStatus.Failed;
-            job.ErrorMessage = "Quá thời gian xử lý cho phép hoặc tác vụ bị hủy.";
-            job.CompletedAtUtc = DateTime.UtcNow;
-            await db.SaveChangesAsync(CancellationToken.None);
+            await MarkJobFailedAsync(jobId, "Quá thời gian xử lý cho phép hoặc tác vụ bị hủy.");
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Lỗi khi xử lý job OCR {JobId}", jobId);
-            job.Status = OcrJobStatus.Failed;
-            job.ErrorMessage = ex.Message.Length > 500 ? ex.Message[..500] : ex.Message;
-            job.CompletedAtUtc = DateTime.UtcNow;
-            await db.SaveChangesAsync(CancellationToken.None);
+            await MarkJobFailedAsync(jobId, ex.Message);
+        }
+    }
+
+    private async Task MarkJobFailedAsync(Guid jobId, string errorMessage)
+    {
+        try
+        {
+            using IServiceScope scope = _scopeFactory.CreateScope();
+            AppDbContext db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            OcrJob? job = await db.Jobs.FirstOrDefaultAsync(j => j.Id == jobId);
+            if (job != null)
+            {
+                job.Status = OcrJobStatus.Failed;
+                job.ErrorMessage = errorMessage.Length > 500 ? errorMessage[..500] : errorMessage;
+                job.CompletedAtUtc = DateTime.UtcNow;
+                await db.SaveChangesAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Không thể cập nhật trạng thái lỗi cho job {JobId}", jobId);
         }
     }
 }

@@ -10,9 +10,9 @@ public class UploadRequestDto
     public string Language { get; set; } = "vie";
 
     /// <summary>
-    /// Optional page range for PDF/TIFF, e.g. "1-5", "1, 3, 5". If empty, processes all pages up to MaxPdfPages.
+    /// Page range for PDF/TIFF, e.g. "1-5", "1, 3, 5", or "all" (default).
     /// </summary>
-    public string? PageRange { get; set; }
+    public string PageRange { get; set; } = "all";
 
     public bool PreprocessGrayscale { get; set; } = true;
     public bool PreprocessContrast { get; set; } = true;

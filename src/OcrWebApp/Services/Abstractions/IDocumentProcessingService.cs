@@ -5,7 +5,7 @@ public record OcrProcessingOptions(
     bool PreprocessGrayscale,
     bool PreprocessContrast,
     bool PreprocessDeskew,
-    string? PageRange = null
+    string PageRange = "all"
 );
 
 public record ProcessedPageResult(

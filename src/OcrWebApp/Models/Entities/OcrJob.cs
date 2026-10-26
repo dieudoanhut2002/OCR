@@ -40,7 +40,7 @@ public class OcrJob
 
     public string? ErrorMessage { get; set; }
 
-    public string? PageRange { get; set; }
+    public string PageRange { get; set; } = "all";
 
     public bool PreprocessGrayscale { get; set; } = true;
     public bool PreprocessContrast { get; set; } = true;

@@ -140,9 +140,8 @@ document.addEventListener('DOMContentLoaded', () => {
             formData.append('Files', file);
         });
         formData.append('Language', ocrLanguage.value);
-        if (pageRangeInput && pageRangeInput.value.trim()) {
-            formData.append('PageRange', pageRangeInput.value.trim());
-        }
+        const pageRange = (pageRangeInput && pageRangeInput.value.trim()) ? pageRangeInput.value.trim() : 'all';
+        formData.append('PageRange', pageRange);
         formData.append('PreprocessGrayscale', preprocessGrayscale.checked);
         formData.append('PreprocessContrast', preprocessContrast.checked);
         formData.append('PreprocessDeskew', preprocessDeskew.checked);
