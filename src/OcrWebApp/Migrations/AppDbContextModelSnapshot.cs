@@ -63,6 +63,7 @@ namespace OcrWebApp.Migrations
                         .HasColumnType("nvarchar(260)");
 
                     b.Property<string>("PageRange")
+                        .IsRequired()
                         .HasColumnType("nvarchar(max)");
 
                     b.Property<bool>("PreprocessContrast")
